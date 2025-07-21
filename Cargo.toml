@@ -1,0 +1,15 @@
+[workspace]
+members = ["shared", "encoder-firmware"]
+resolver = "2"
+
+cargo-features = ["per-package-target"]
+
+[workspace.dependencies]
+serde = { version = "1.0.203", default-features = false, features = ["derive"] }
+postcard = "1.0"
+cobs = { version = "0.4.0", default-features = false }
+crc = { version = "3.0", default-features = false }
+
+[profile.release]
+# Enable generation of debug symbols even on release builds
+debug = true

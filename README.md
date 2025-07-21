@@ -13,7 +13,7 @@ This project provides a high-precision stepper motor dosing system with IoT capa
 
 ## Hardware Requirements
 - **Controller**: raspbery pi 2W,3,4,5
-- **Stepper Motor Driver**: [BIGTREETECH MKS-Servo42C](https://github.com/makerbase-mks/MKS-SERVO42C) with UART control for precise motor management.
+- **Stepper Motor Driver**: [Klipper](https://github.com/Klipper3d/klipper) and [BIGTREETECH MKS-Servo42C](https://github.com/makerbase-mks/MKS-SERVO42C) with UART control for precise motor management.
 - **Power Supply**: Suitable power source for the raspbery pi SBC and stepper motor driver.
 - **Peristaltic Pump**: DIY or commercially available peristaltic pump compatible with the stepper motor.
 - **Miscellaneous**: Cables, connectors, and mounting hardware as needed for your specific setup.
@@ -33,6 +33,9 @@ graph TD
     C -->|UART| D[MKS-SERVO42C]
     D --> E[Stepper Motor]
     E --> F[Peristaltic Pump]
+    C -->|UART| K[Klipper]
+    K --> Z[Stepper Motor]
+    Z --> X[Peristaltic Pump]
     B -->|MQTT| G[Broker]
     G --> H[Home Assistant]
     G --> I[Mobile Apps]
