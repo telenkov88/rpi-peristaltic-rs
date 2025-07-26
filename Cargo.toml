@@ -13,3 +13,4 @@ crc = { version = "3.0", default-features = false }
 [profile.release]
 # Enable generation of debug symbols even on release builds
 debug = true
+

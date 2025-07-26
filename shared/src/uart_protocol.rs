@@ -2,20 +2,30 @@ use crate::types::{Packet, BUFFER_SIZE};
 use crc::Crc;
 
 pub const COMMS_CRC: Crc<u16> = crc::Crc::<u16>::new(&crc::CRC_16_KERMIT);
+pub const SYNC_HEADER: [u8; 4] = [0xAA, 0x55, 0xAA, 0x55];
+const SYNC_HEADER_LEN: usize = 4;
+const LENGTH_FIELD_LEN: usize = 1;
+const CRC_LEN: usize = 2;
+const PAYLOAD_START: usize = SYNC_HEADER_LEN + LENGTH_FIELD_LEN;
+const MAX_COBS_LEN: usize = BUFFER_SIZE - PAYLOAD_START - CRC_LEN;
+const CRC_START: usize = BUFFER_SIZE - CRC_LEN;
 
 pub fn serialize_packet(packet: &Packet) -> [u8; BUFFER_SIZE] {
     let mut buf = [0u8; BUFFER_SIZE];
 
-    let used = postcard::to_slice_cobs(packet, &mut buf[1..61])
+    buf[..SYNC_HEADER_LEN].copy_from_slice(&SYNC_HEADER);
+
+    let payload_range = PAYLOAD_START..PAYLOAD_START + MAX_COBS_LEN;
+    let used = postcard::to_slice_cobs(packet, &mut buf[payload_range])
         .expect("Serialization error")
         .len();
 
-    buf[0] = used as u8;
+    buf[SYNC_HEADER_LEN] = used as u8;
 
-    let crc = COMMS_CRC.checksum(&buf[0..used + 1]);
+    let crc_range = ..PAYLOAD_START + used;
+    let crc = COMMS_CRC.checksum(&buf[crc_range]);
 
-    buf[62] = (crc >> 8) as u8;
-    buf[63] = crc as u8;
+    buf[CRC_START..].copy_from_slice(&crc.to_be_bytes());
 
     buf
 }
@@ -25,19 +35,19 @@ pub fn deserialize_with_crc(buf: &[u8]) -> Option<Packet> {
         return None;
     }
 
-    // Read the length of COBS data from the first byte
-    let cobs_len = buf[0] as usize;
-
-    if cobs_len == 0 || cobs_len > 60 {
-        // Max 60 bytes for COBS data
+    if buf[..SYNC_HEADER_LEN] != SYNC_HEADER {
         return None;
     }
 
-    // Extract CRC from the last 2 bytes
-    let crc_received = ((buf[62] as u16) << 8) | buf[63] as u16;
+    let cobs_len = buf[SYNC_HEADER_LEN] as usize;
 
-    // Calculate CRC on length byte + COBS data
-    let crc_calculated = COMMS_CRC.checksum(&buf[0..cobs_len + 1]);
+    if cobs_len == 0 || cobs_len > MAX_COBS_LEN {
+        return None;
+    }
+
+    let crc_received = u16::from_be_bytes([buf[CRC_START], buf[CRC_START + 1]]);
+
+    let crc_calculated = COMMS_CRC.checksum(&buf[..PAYLOAD_START + cobs_len]);
 
     if crc_received != crc_calculated {
         return None;
@@ -45,10 +55,11 @@ pub fn deserialize_with_crc(buf: &[u8]) -> Option<Packet> {
 
     // Decode the COBS data
     let mut packet_buf = [0u8; BUFFER_SIZE];
-    let decode_report = cobs::decode(&buf[1..cobs_len + 1], &mut packet_buf).ok()?;
+    let payload_end = PAYLOAD_START + cobs_len;
+    let decode_report = cobs::decode(&buf[PAYLOAD_START..payload_end], &mut packet_buf).ok()?;
     let len = decode_report.frame_size();
 
-    postcard::from_bytes(&packet_buf[0..len]).ok()
+    postcard::from_bytes(&packet_buf[..len]).ok()
 }
 
 pub fn create_sensor_packet(seq: u32, encoders: [i32; 8]) -> Packet {
@@ -102,10 +113,72 @@ mod tests {
         let packet = Packet::Reset(ResetCommand::all());
         let mut serialized = serialize_packet(&packet);
 
-        // Corrupt the CRC
-        serialized[62] = 0xFF;
-        serialized[63] = 0xFF;
+        serialized[CRC_START] = !serialized[CRC_START];
 
+        assert!(deserialize_with_crc(&serialized).is_none());
+    }
+
+    #[test]
+    fn test_invalid_sync_header() {
+        let mut serialized = serialize_packet(&Packet::Reset(ResetCommand::all()));
+
+        // Corrupt sync header
+        serialized[0] = 0x00;
+        assert!(deserialize_with_crc(&serialized).is_none());
+    }
+
+    #[test]
+    fn test_invalid_cobs_length_zero() {
+        let mut serialized = serialize_packet(&Packet::Reset(ResetCommand::all()));
+
+        // Set invalid COBS length
+        serialized[SYNC_HEADER_LEN] = 0;
+        assert!(deserialize_with_crc(&serialized).is_none());
+    }
+
+    #[test]
+    fn test_invalid_cobs_length_overflow() {
+        let mut serialized = serialize_packet(&Packet::Reset(ResetCommand::all()));
+
+        // Set invalid COBS length
+        serialized[SYNC_HEADER_LEN] = MAX_COBS_LEN as u8 + 1;
+        assert!(deserialize_with_crc(&serialized).is_none());
+    }
+
+    #[test]
+    fn test_corrupted_cobs_data() {
+        let mut serialized = serialize_packet(&Packet::Reset(ResetCommand::all()));
+
+        // Corrupt COBS data
+        serialized[PAYLOAD_START] = !serialized[PAYLOAD_START];
+        assert!(deserialize_with_crc(&serialized).is_none());
+    }
+
+    #[test]
+    fn test_buffer_size_mismatch() {
+        let small_buf = [0u8; BUFFER_SIZE - 1];
+        assert!(deserialize_with_crc(&small_buf).is_none());
+    }
+
+    #[test]
+    fn test_crc_calculation_range() {
+        let packet = Packet::Reset(ResetCommand::all());
+        let serialized = serialize_packet(&packet);
+        let used_len = serialized[SYNC_HEADER_LEN] as usize;
+
+        let crc_range_to_check = ..PAYLOAD_START + used_len;
+        let expected_crc = COMMS_CRC.checksum(&serialized[crc_range_to_check]);
+
+        let stored_crc = u16::from_be_bytes([serialized[CRC_START], serialized[CRC_START + 1]]);
+
+        assert_eq!(stored_crc, expected_crc);
+    }
+
+    #[test]
+    fn test_empty_payload() {
+        // Should fail because cobs_len=0 is invalid
+        let mut serialized = serialize_packet(&Packet::Reset(ResetCommand::all()));
+        serialized[SYNC_HEADER_LEN] = 0; // Force zero length
         assert!(deserialize_with_crc(&serialized).is_none());
     }
 }
