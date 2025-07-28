@@ -1,0 +1,31 @@
+{
+  "languages": {
+    "TOML": {
+      "language_servers": ["!Taplo"]
+    }
+  },
+  "lsp": {
+    "rust-analyzer": {
+      "binary": {
+        "ignore_system_version": true
+      },
+      "initialization_options": {
+        "rustfmt": {
+          "extraArgs": ["+nightly"]
+        },
+        "imports": {
+          "preferNoStd": true
+        },
+        "server": {
+          "extraEnv": {
+            "RUSTUP_TOOLCHAIN": "nightly"
+          }
+        },
+        "check": {
+          "command": "clippy",
+          "extraArgs": ["+nightly"]
+        }
+      }
+    }
+  }
+}
